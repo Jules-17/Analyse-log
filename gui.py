@@ -209,7 +209,7 @@ top_frame.pack(fill="x", padx=10, pady=10)
 
 # Zone compteur de logs
 log_count_label = tk.Label(top_frame, text="Lignes trouvées : 0", font=("Arial", 12, "bold"))
-log_count_label.pack(anchor="w", pady=2)
+log_count_label.pack(anchor="e", pady=2)
 
 # Sélection fichier + barre de chargement
 left_frame = tk.Frame(top_frame)
@@ -278,3 +278,4 @@ output_text.pack(side="left", expand=True, fill="both")
 scrollbar.config(command=output_text.yview)
 
 root.mainloop()
+
