@@ -18,7 +18,7 @@ def analyze_logs(csv_file, start_date=None, end_date=None):
         for row in reader:
             try:
                 ip = row["Source IP"]
-                domain = row["Host Name"]
+                url = row["URL"]
                 category = row["Category"]
 
                 timestamp = datetime.fromtimestamp(
@@ -39,7 +39,7 @@ def analyze_logs(csv_file, start_date=None, end_date=None):
                     continue
 
                 logs_per_ip[ip] += 1
-                ips_per_domain[domain].add(ip)
+                ips_per_domain[url].add(ip)
                 ips_per_category[category].add(ip)
 
                 minute = timestamp.replace(second=0, microsecond=0)
@@ -49,3 +49,4 @@ def analyze_logs(csv_file, start_date=None, end_date=None):
                 continue
 
     return logs_per_ip, ips_per_domain, activity_per_time, ips_per_category, min_date, max_date
+
