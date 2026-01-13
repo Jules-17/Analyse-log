@@ -278,4 +278,3 @@ output_text.pack(side="left", expand=True, fill="both")
 scrollbar.config(command=output_text.yview)
 
 root.mainloop()
-
