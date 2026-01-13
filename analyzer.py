@@ -1,7 +1,7 @@
 import csv
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
-
+import tldextract
 
 def analyze_logs(csv_file, start_date=None, end_date=None):
     logs_per_ip = Counter()
@@ -21,6 +21,10 @@ def analyze_logs(csv_file, start_date=None, end_date=None):
                 url = row["URL"]
                 category = row["Category"]
 
+                # Extraire le domaine principal
+                domain_info = tldextract.extract(url)
+                main_domain = f"{domain_info.domain}.{domain_info.suffix}"
+
                 timestamp = datetime.fromtimestamp(
                     int(row["Timestamp (UTC) Seconds"]),
                     tz=timezone.utc
@@ -38,15 +42,17 @@ def analyze_logs(csv_file, start_date=None, end_date=None):
                 if end_date and timestamp > end_date:
                     continue
 
+                # Comptage des logs et IP
                 logs_per_ip[ip] += 1
-                ips_per_domain[url].add(ip)
+                ips_per_domain[main_domain].add(ip)
                 ips_per_category[category].add(ip)
 
+                # Activité par minute (timestamp arrondi à la minute)
                 minute = timestamp.replace(second=0, microsecond=0)
                 activity_per_time[minute] += 1
 
             except Exception:
+                # Ignore les lignes mal formées
                 continue
 
     return logs_per_ip, ips_per_domain, activity_per_time, ips_per_category, min_date, max_date
-
