@@ -4,10 +4,35 @@ import threading
 from analyzer import analyze_logs
 
 # =========================
+# Variables globales
+# =========================
+
+last_results = None  # Stocke les résultats de la dernière analyse
+
+
+# =========================
+# Utilitaires
+# =========================
+
+def parse_top_value(value):
+    value = value.strip().lower()
+
+    if value == "" or value == "all":
+        return None
+
+    if value.isdigit():
+        return int(value)
+
+    raise ValueError("Valeur invalide (utiliser un nombre ou 'all')")
+
+
+# =========================
 # Logique applicative
 # =========================
 
 def select_file():
+    global last_results
+
     file_path = filedialog.askopenfilename(
         title="Sélectionner un fichier de logs CSV",
         filetypes=[
@@ -22,11 +47,9 @@ def select_file():
     output_text.delete("1.0", tk.END)
     output_text.insert(tk.END, "⏳ Analyse en cours...\n")
 
-    # Afficher la barre de chargement et démarrer l'animation
     progress.pack(pady=5)
     progress.start(10)
 
-    # Lancer l'analyse dans un thread pour ne pas bloquer l'UI
     threading.Thread(
         target=run_analysis,
         args=(file_path,),
@@ -35,46 +58,100 @@ def select_file():
 
 
 def run_analysis(file_path):
+    global last_results
+
     try:
-        logs_per_ip, ips_per_domain, activity_per_time, ips_per_category = analyze_logs(file_path)
+        last_results = analyze_logs(file_path)
+
         root.after(
             0,
-            display_results,
-            logs_per_ip,
-            ips_per_domain,
-            activity_per_time,
-            ips_per_category
+            lambda: display_results_from_options()
         )
+
     except Exception as e:
         root.after(0, show_error, str(e))
 
 
-def display_results(logs_per_ip, ips_per_domain, activity_per_time, ips_per_category):
-    # Arrêter et cacher la barre de chargement
+def apply_options():
+    if last_results is None:
+        messagebox.showwarning(
+            "Aucun fichier",
+            "Veuillez d'abord sélectionner un fichier de logs."
+        )
+        return
+
+    display_results_from_options()
+
+
+def display_results_from_options():
+    try:
+        top_ip = parse_top_value(entry_top_ip.get())
+        top_domain = parse_top_value(entry_top_domain.get())
+        top_category = parse_top_value(entry_top_category.get())
+
+        display_results(
+            last_results,
+            top_ip,
+            top_domain,
+            top_category
+        )
+
+    except Exception as e:
+        show_error(str(e))
+
+
+def display_results(results, top_ip, top_domain, top_category):
     progress.stop()
     progress.pack_forget()
 
+    logs_per_ip, ips_per_domain, activity_per_time, ips_per_category = results
+
     output_text.delete("1.0", tk.END)
 
-    output_text.insert(tk.END, "📊 Nombre de lignes de log par IP source (ordre décroissant)\n")
+    # IP sources
+    output_text.insert(tk.END, "📊 Logs par adresse IP source\n")
     output_text.insert(tk.END, "-" * 60 + "\n")
-    for ip, count in logs_per_ip.most_common():
+
+    for ip, count in logs_per_ip.most_common(top_ip):
         output_text.insert(tk.END, f"{ip} : {count}\n")
 
-    output_text.insert(tk.END, "\n🌐 Nombre d’IP sources distinctes par domaine cible\n")
+    # Domaines
+    output_text.insert(tk.END, "\n🌐 IP sources distinctes par domaine cible\n")
     output_text.insert(tk.END, "-" * 60 + "\n")
-    for domain, ips in sorted(ips_per_domain.items(), key=lambda x: len(x[1]), reverse=True):
+
+    domain_items = sorted(
+        ips_per_domain.items(),
+        key=lambda x: len(x[1]),
+        reverse=True
+    )
+
+    if top_domain is not None:
+        domain_items = domain_items[:top_domain]
+
+    for domain, ips in domain_items:
         output_text.insert(tk.END, f"{domain} : {len(ips)}\n")
 
+    # Pic d’activité
     peak_time, peak_count = activity_per_time.most_common(1)[0]
     output_text.insert(
         tk.END,
         f"\n🔥 Pic d’activité : {peak_time} UTC ({peak_count} événements)\n"
     )
 
-    output_text.insert(tk.END, "\n🏷️ Nombre d’IP sources distinctes par catégorie de site\n")
+    # Catégories
+    output_text.insert(tk.END, "\n🏷️ IP sources distinctes par catégorie de site\n")
     output_text.insert(tk.END, "-" * 60 + "\n")
-    for category, ips in sorted(ips_per_category.items(), key=lambda x: len(x[1]), reverse=True):
+
+    category_items = sorted(
+        ips_per_category.items(),
+        key=lambda x: len(x[1]),
+        reverse=True
+    )
+
+    if top_category is not None:
+        category_items = category_items[:top_category]
+
+    for category, ips in category_items:
         output_text.insert(tk.END, f"{category} : {len(ips)}\n")
 
     output_text.insert(tk.END, "\n✅ Analyse terminée\n")
@@ -92,52 +169,63 @@ def show_error(message):
 
 root = tk.Tk()
 root.title("Analyseur automatique de logs CSV")
-root.geometry("1100x700")
+root.geometry("1150x750")
 
-# ----- Frame du haut -----
 top_frame = tk.Frame(root)
 top_frame.pack(fill="x", padx=10, pady=10)
 
-# Partie gauche : titre + bouton
+# ----- Gauche -----
 left_frame = tk.Frame(top_frame)
 left_frame.pack(side="left", anchor="nw")
 
-title_label = tk.Label(
+tk.Label(
     left_frame,
     text="Analyse automatisée de logs CSV",
     font=("Arial", 16, "bold")
-)
-title_label.pack(anchor="w")
+).pack(anchor="w")
 
-select_button = tk.Button(
+tk.Button(
     left_frame,
     text="📂 Sélectionner un fichier de logs",
     font=("Arial", 12),
     command=select_file
-)
-select_button.pack(anchor="w", pady=5)
+).pack(anchor="w", pady=5)
 
-# Partie droite : options (placeholder)
-right_frame = tk.Frame(top_frame)
+# ----- Droite : options -----
+right_frame = tk.Frame(top_frame, relief="groove", bd=2, padx=10, pady=10)
 right_frame.pack(side="right", anchor="ne")
 
-options_label = tk.Label(
+tk.Label(
     right_frame,
-    text="Options",
+    text="Options (Top N ou 'all')",
     font=("Arial", 12, "bold")
-)
-options_label.pack(anchor="e")
+).pack(anchor="w", pady=(0, 5))
 
-tk.Label(right_frame, text="(à venir)").pack(anchor="e")
+tk.Label(right_frame, text="Top IP sources :").pack(anchor="w")
+entry_top_ip = tk.Entry(right_frame, width=10)
+entry_top_ip.insert(0, "all")
+entry_top_ip.pack(anchor="w", pady=2)
 
-# ----- Barre de chargement (invisible au départ) -----
-progress = ttk.Progressbar(
-    root,
-    mode="indeterminate",
-    length=400
-)
+tk.Label(right_frame, text="Top domaines :").pack(anchor="w")
+entry_top_domain = tk.Entry(right_frame, width=10)
+entry_top_domain.insert(0, "all")
+entry_top_domain.pack(anchor="w", pady=2)
 
-# ----- Zone résultats avec scrollbar -----
+tk.Label(right_frame, text="Top catégories :").pack(anchor="w")
+entry_top_category = tk.Entry(right_frame, width=10)
+entry_top_category.insert(0, "all")
+entry_top_category.pack(anchor="w", pady=2)
+
+tk.Button(
+    right_frame,
+    text="✅ Appliquer les options",
+    command=apply_options
+).pack(anchor="w", pady=(10, 0))
+
+# ----- Barre de chargement -----
+progress = ttk.Progressbar(root, mode="indeterminate", length=400)
+
+# ----- Résultats -----
 text_frame = tk.Frame(root)
 text_frame.pack(expand=True, fill="both", padx=10, pady=10)
 
@@ -154,7 +242,6 @@ output_text.pack(side="left", expand=True, fill="both")
 
 scrollbar.config(command=output_text.yview)
 
-# Scroll molette
 output_text.bind(
     "<MouseWheel>",
     lambda e: output_text.yview_scroll(-1 * int(e.delta / 120), "units")
