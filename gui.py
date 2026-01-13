@@ -1,104 +1,112 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from datetime import datetime, timezone, timedelta
 import threading
 from analyzer import analyze_logs
 
 # =========================
 # Variables globales
 # =========================
-
-last_results = None  # Stocke les résultats de la dernière analyse
-
+current_file = None
+date_min = None
+date_max = None
+last_results = None
 
 # =========================
 # Utilitaires
 # =========================
-
 def parse_top_value(value):
     value = value.strip().lower()
-
     if value == "" or value == "all":
         return None
-
     if value.isdigit():
         return int(value)
+    raise ValueError("Valeur invalide (nombre ou 'all')")
 
-    raise ValueError("Valeur invalide (utiliser un nombre ou 'all')")
-
+def parse_date(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError("Format date invalide (YYYY-MM-DD)")
 
 # =========================
 # Logique applicative
 # =========================
-
 def select_file():
-    global last_results
+    global current_file, date_min, date_max, last_results
 
     file_path = filedialog.askopenfilename(
         title="Sélectionner un fichier de logs CSV",
-        filetypes=[
-            ("Fichiers CSV", "*.csv"),
-            ("Tous les fichiers", "*.*")
-        ]
+        filetypes=[("CSV", "*.csv"), ("Tous les fichiers", "*.*")]
     )
-
     if not file_path:
         return
 
+    current_file = file_path
     output_text.delete("1.0", tk.END)
-    output_text.insert(tk.END, "⏳ Analyse en cours...\n")
-
+    output_text.insert(tk.END, "⏳ Analyse du fichier...\n")
     progress.pack(pady=5)
     progress.start(10)
 
-    threading.Thread(
-        target=run_analysis,
-        args=(file_path,),
-        daemon=True
-    ).start()
+    threading.Thread(target=load_file, daemon=True).start()
 
-
-def run_analysis(file_path):
-    global last_results
-
+def load_file():
+    global date_min, date_max, last_results
     try:
-        last_results = analyze_logs(file_path)
+        results = analyze_logs(current_file)
+        logs_per_ip, ips_per_domain, activity_per_time, ips_per_category, date_min, date_max = results
+        last_results = (logs_per_ip, ips_per_domain, activity_per_time, ips_per_category)
 
-        root.after(
-            0,
-            lambda: display_results_from_options()
-        )
-
+        root.after(0, init_date_entries)
+        root.after(0, apply_options)
     except Exception as e:
         root.after(0, show_error, str(e))
 
+def init_date_entries():
+    entry_date_start.delete(0, tk.END)
+    entry_date_end.delete(0, tk.END)
+    entry_date_start.insert(0, date_min.strftime("%Y-%m-%d"))
+    entry_date_end.insert(0, date_max.strftime("%Y-%m-%d"))
 
 def apply_options():
-    if last_results is None:
-        messagebox.showwarning(
-            "Aucun fichier",
-            "Veuillez d'abord sélectionner un fichier de logs."
-        )
+    if not current_file:
+        messagebox.showwarning("Aucun fichier", "Veuillez sélectionner un fichier.")
         return
 
-    display_results_from_options()
-
-
-def display_results_from_options():
     try:
         top_ip = parse_top_value(entry_top_ip.get())
         top_domain = parse_top_value(entry_top_domain.get())
         top_category = parse_top_value(entry_top_category.get())
 
-        display_results(
-            last_results,
-            top_ip,
-            top_domain,
-            top_category
-        )
+        start_date = parse_date(entry_date_start.get())
+        end_date = parse_date(entry_date_end.get()) + timedelta(days=1)
 
+        progress.pack(pady=5)
+        progress.start(10)
+
+        threading.Thread(
+            target=run_filtered_analysis,
+            args=(start_date, end_date, top_ip, top_domain, top_category),
+            daemon=True
+        ).start()
     except Exception as e:
         show_error(str(e))
 
+def run_filtered_analysis(start_date, end_date, top_ip, top_domain, top_category):
+    try:
+        results = analyze_logs(
+            current_file,
+            start_date=start_date,
+            end_date=end_date
+        )
+        logs_per_ip, ips_per_domain, activity_per_time, ips_per_category, _, _ = results
+        results_to_display = (logs_per_ip, ips_per_domain, activity_per_time, ips_per_category)
+        root.after(
+            0,
+            lambda: display_results(results_to_display, top_ip, top_domain, top_category)
+        )
+    except Exception as e:
+        root.after(0, show_error, str(e))
 
 def display_results(results, top_ip, top_domain, top_category):
     progress.stop()
@@ -108,143 +116,124 @@ def display_results(results, top_ip, top_domain, top_category):
 
     output_text.delete("1.0", tk.END)
 
-    # IP sources
-    output_text.insert(tk.END, "📊 Logs par adresse IP source\n")
-    output_text.insert(tk.END, "-" * 60 + "\n")
-
+    # Logs par IP
+    output_text.insert(tk.END, "📊 Logs par IP source\n" + "-" * 60 + "\n")
     for ip, count in logs_per_ip.most_common(top_ip):
         output_text.insert(tk.END, f"{ip} : {count}\n")
 
-    # Domaines
-    output_text.insert(tk.END, "\n🌐 IP sources distinctes par domaine cible\n")
-    output_text.insert(tk.END, "-" * 60 + "\n")
-
-    domain_items = sorted(
-        ips_per_domain.items(),
-        key=lambda x: len(x[1]),
-        reverse=True
-    )
-
-    if top_domain is not None:
-        domain_items = domain_items[:top_domain]
-
-    for domain, ips in domain_items:
+    # IP distinctes par domaine
+    output_text.insert(tk.END, "\n🌐 IP distinctes par domaine\n" + "-" * 60 + "\n")
+    domains = sorted(ips_per_domain.items(), key=lambda x: len(x[1]), reverse=True)
+    if top_domain:
+        domains = domains[:top_domain]
+    for domain, ips in domains:
         output_text.insert(tk.END, f"{domain} : {len(ips)}\n")
 
-    # Pic d’activité
-    peak_time, peak_count = activity_per_time.most_common(1)[0]
-    output_text.insert(
-        tk.END,
-        f"\n🔥 Pic d’activité : {peak_time} UTC ({peak_count} événements)\n"
-    )
+    # Pic d'activité
+    if activity_per_time:
+        peak_time, peak_count = activity_per_time.most_common(1)[0]
+        output_text.insert(tk.END, f"\n🔥 Pic d’activité : {peak_time} ({peak_count})\n")
 
-    # Catégories
-    output_text.insert(tk.END, "\n🏷️ IP sources distinctes par catégorie de site\n")
-    output_text.insert(tk.END, "-" * 60 + "\n")
-
-    category_items = sorted(
-        ips_per_category.items(),
-        key=lambda x: len(x[1]),
-        reverse=True
-    )
-
-    if top_category is not None:
-        category_items = category_items[:top_category]
-
-    for category, ips in category_items:
+    # IP distinctes par catégorie
+    output_text.insert(tk.END, "\n🏷️ IP distinctes par catégorie\n" + "-" * 60 + "\n")
+    categories = sorted(ips_per_category.items(), key=lambda x: len(x[1]), reverse=True)
+    if top_category:
+        categories = categories[:top_category]
+    for category, ips in categories:
         output_text.insert(tk.END, f"{category} : {len(ips)}\n")
 
     output_text.insert(tk.END, "\n✅ Analyse terminée\n")
-
 
 def show_error(message):
     progress.stop()
     progress.pack_forget()
     messagebox.showerror("Erreur", message)
 
+# ----- Réinitialiser options -----
+def reset_options():
+    entry_top_ip.delete(0, tk.END)
+    entry_top_ip.insert(0, "all")
+
+    entry_top_domain.delete(0, tk.END)
+    entry_top_domain.insert(0, "all")
+
+    entry_top_category.delete(0, tk.END)
+    entry_top_category.insert(0, "all")
+
+    if date_min and date_max:
+        entry_date_start.delete(0, tk.END)
+        entry_date_start.insert(0, date_min.strftime("%Y-%m-%d"))
+
+        entry_date_end.delete(0, tk.END)
+        entry_date_end.insert(0, date_max.strftime("%Y-%m-%d"))
 
 # =========================
 # Interface graphique
 # =========================
-
 root = tk.Tk()
 root.title("Analyseur automatique de logs CSV")
-root.geometry("1150x750")
+root.geometry("1200x800")
 
+# ----- Frame haut pour sélection + options -----
 top_frame = tk.Frame(root)
 top_frame.pack(fill="x", padx=10, pady=10)
 
-# ----- Gauche -----
+# Sélection fichier + barre de chargement
 left_frame = tk.Frame(top_frame)
-left_frame.pack(side="left", anchor="nw")
+left_frame.pack(side="top", anchor="nw", fill="x")
 
-tk.Label(
-    left_frame,
-    text="Analyse automatisée de logs CSV",
-    font=("Arial", 16, "bold")
-).pack(anchor="w")
+tk.Label(left_frame, text="Analyse automatisée de logs CSV",
+         font=("Arial", 16, "bold")).pack(anchor="w")
+tk.Button(left_frame, text="📂 Sélectionner un fichier",
+          font=("Arial", 12), command=select_file).pack(anchor="w", pady=5)
 
-tk.Button(
-    left_frame,
-    text="📂 Sélectionner un fichier de logs",
-    font=("Arial", 12),
-    command=select_file
-).pack(anchor="w", pady=5)
+# Barre de chargement
+progress = ttk.Progressbar(left_frame, mode="indeterminate", length=400)
 
-# ----- Droite : options -----
-right_frame = tk.Frame(top_frame, relief="groove", bd=2, padx=10, pady=10)
-right_frame.pack(side="right", anchor="ne")
+# Options horizontales
+options_frame = tk.Frame(left_frame)
+options_frame.pack(anchor="w", pady=10, fill="x")
 
-tk.Label(
-    right_frame,
-    text="Options (Top N ou 'all')",
-    font=("Arial", 12, "bold")
-).pack(anchor="w", pady=(0, 5))
-
-tk.Label(right_frame, text="Top IP sources :").pack(anchor="w")
-entry_top_ip = tk.Entry(right_frame, width=10)
+tk.Label(options_frame, text="Top IP:").grid(row=0, column=0, padx=5)
+entry_top_ip = tk.Entry(options_frame, width=6)
 entry_top_ip.insert(0, "all")
-entry_top_ip.pack(anchor="w", pady=2)
+entry_top_ip.grid(row=0, column=1, padx=5)
 
-tk.Label(right_frame, text="Top domaines :").pack(anchor="w")
-entry_top_domain = tk.Entry(right_frame, width=10)
+tk.Label(options_frame, text="Top Domaines:").grid(row=0, column=2, padx=5)
+entry_top_domain = tk.Entry(options_frame, width=6)
 entry_top_domain.insert(0, "all")
-entry_top_domain.pack(anchor="w", pady=2)
+entry_top_domain.grid(row=0, column=3, padx=5)
 
-tk.Label(right_frame, text="Top catégories :").pack(anchor="w")
-entry_top_category = tk.Entry(right_frame, width=10)
+tk.Label(options_frame, text="Top Catégories:").grid(row=0, column=4, padx=5)
+entry_top_category = tk.Entry(options_frame, width=6)
 entry_top_category.insert(0, "all")
-entry_top_category.pack(anchor="w", pady=2)
+entry_top_category.grid(row=0, column=5, padx=5)
 
-tk.Button(
-    right_frame,
-    text="✅ Appliquer les options",
-    command=apply_options
-).pack(anchor="w", pady=(10, 0))
+tk.Label(options_frame, text="Date début:").grid(row=0, column=6, padx=5)
+entry_date_start = tk.Entry(options_frame, width=10)
+entry_date_start.grid(row=0, column=7, padx=5)
 
-# ----- Barre de chargement -----
-progress = ttk.Progressbar(root, mode="indeterminate", length=400)
+tk.Label(options_frame, text="Date fin:").grid(row=0, column=8, padx=5)
+entry_date_end = tk.Entry(options_frame, width=10)
+entry_date_end.grid(row=0, column=9, padx=5)
 
-# ----- Résultats -----
+tk.Button(options_frame, text="✅ Appliquer",
+          command=apply_options).grid(row=0, column=10, padx=5)
+tk.Button(options_frame, text="♻️ Réinitialiser",
+          command=reset_options).grid(row=0, column=11, padx=5)
+
+# ----- Zone texte résultats -----
 text_frame = tk.Frame(root)
 text_frame.pack(expand=True, fill="both", padx=10, pady=10)
 
 scrollbar = tk.Scrollbar(text_frame)
 scrollbar.pack(side="right", fill="y")
 
-output_text = tk.Text(
-    text_frame,
-    wrap="word",
-    font=("Consolas", 10),
-    yscrollcommand=scrollbar.set
-)
+output_text = tk.Text(text_frame, wrap="word",
+                      font=("Consolas", 10),
+                      yscrollcommand=scrollbar.set)
 output_text.pack(side="left", expand=True, fill="both")
 
 scrollbar.config(command=output_text.yview)
-
-output_text.bind(
-    "<MouseWheel>",
-    lambda e: output_text.yview_scroll(-1 * int(e.delta / 120), "units")
-)
 
 root.mainloop()
